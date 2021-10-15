@@ -459,7 +459,7 @@ mean(predict_class==test.data$HSUGBC)
 # 
 # summary(model)
 ```
-```{r.smote}
+```{r smote}
 dat44<-dat4[,1:18] # do NOT include DIABBC and sores other than dia_score
 dat44$HCHOLBC<-droplevels(dat44$HCHOLBC)
 dat44<-na.omit(dat44)
@@ -472,7 +472,7 @@ table(dat44.balanced$HCHOLBC)
 
 
 dat44.balanced<-dat44.balanced %>% mutate(
-  dia_score= ifelse(HCHOLBC==5, 0, 1),
+  cho_score= ifelse(HCHOLBC==5, 0, 1),
 )
 
 dat44.balanced$cho_score<-as.factor(dat44.balanced$cho_score)
@@ -539,7 +539,7 @@ mean(predict_class==test.data$HCHOLBC)
 ```{r smote-k-fold cross-valdation for linear regression }
 set.seed(2021)
 # Predict cho_score, drop other y and y-related variables
-dat4<-subset(dat4, select=-c(DIABBC,HCHOLBC, HSUGBC, HYPBC,CVDMEDST, cho_score, sug_score, hyp_score, final_score)) 
+dat4<-subset(dat4, select=-c(DIABBC,HCHOLBC, HSUGBC, HYPBC,CVDMEDST, cvd_score, sug_score, hyp_score, final_score)) 
 # str(dat4)
 # dat44<-dat4[dat4$dia_score>0,]
 # str(dat44)
@@ -548,7 +548,7 @@ dat4<-na.omit(dat4)
 # set up k value for k-fold cross validation 
 k_fold=10
 # create k folds
-folds<-createFolds(y=dat4$cvd_score, k=k_fold)
+folds<-createFolds(y=dat4$cho_score, k=k_fold)
 # create a new vector to record test results
 test_error_RMSE<-c() 
 
@@ -559,11 +559,11 @@ for (i in 1:k_fold){
   fold_test<-dat4[folds[[i]],] # select folds[[i]] as test test
   fold_train<-dat4[-folds[[i]],] # remaining is training set
   # linear regression using AIC
-  M1<-lm(cvd_score~., data=fold_train) # full model
-  M0<-lm(cvd_score~1, data=fold_train) # null model
+  M1<-lm(cho_score~., data=fold_train) # full model
+  M0<-lm(cho_score~1, data=fold_train) # null model
   lm_model<-step(M1, scope=list(lower=M0, upper=M1),direction='backward', k=2) # backward selection from full model to null model
   fold_predict<-predict(lm_model, type='response', newdata=fold_test) # predict y
-  test_error_RMSE[i] = RMSE(fold_predict, fold_test$cvd_score) # calculate and record RMSE
+  test_error_RMSE[i] = RMSE(fold_predict, fold_test$cho_score) # calculate and record RMSE
 }
 
 summary(lm_model)
@@ -631,8 +631,8 @@ for (i in 1:k_fold){
   fold_test<-dat4[folds[[i]],] # select folds[[i]] as test test
   fold_train<-dat4[-folds[[i]],] # remaining is training set
   # linear regression using AIC
-  M1<-lm(cvd_score~., data=fold_train) # full model
-  M0<-lm(cvd_score~1, data=fold_train) # null model
+  M1<-lm(cho_score~., data=fold_train) # full model
+  M0<-lm(cho_score~1, data=fold_train) # null model
   lm_model<-step(M1, scope=list(lower=M0, upper=M1),direction='backward', k=2) # backward selection from full model to null model
   fold_predict<-predict(lm_model, type='response', newdata=fold_test) # predict y
   test_error_RMSE[i] = RMSE(fold_predict, fold_test$cho_score) # calculate and record RMSE
@@ -647,12 +647,12 @@ avg_RMSE
 # dat5 sug_score
 set.seed(2021)
 # Predict dia_score, drop other y and y-related variables
-dat5<-subset(dat5, select=-c(DIABBC, HCHOLBC, HSUGBC, HYPBC, cho_score,CVDMEDST, hyp_score, final_score,cvd_score)) 
+#dat5<-subset(dat5, select=-c(DIABBC, HCHOLBC, HSUGBC, HYPBC, cho_score,CVDMEDST, hyp_score, final_score,cvd_score)) 
 # str(dat4)
 # dat44<-dat4[dat4$dia_score>0,]
 # str(dat44)
 # remove NA values
-dat5<-na.omit(dat5)
+#dat5<-na.omit(dat5)
 # set up k value for k-fold cross validation 
 k_fold=10
 # create k folds
@@ -682,33 +682,33 @@ avg_RMSE
 
 ```{r k-fold cv for neural network}
 # we use dat3 as a starting point for neural network analysis
-dat5=dat3
+dat10=dat3
 # normalize all numeric variables
 mystd <-function (x){
   x<- (x-mean(x, na.rm=TRUE))/sd(x, na.rm=TRUE)
 }
 # remove NA
-dat5<-na.omit(dat5)
+dat10<-na.omit(dat10)
 # normalize numeric values in dat5 such that they have mean value = 0 and std = 1
-dat5_std<-dat5%>% mutate_if(is.numeric, list(mystd))
+dat10_std<-dat10%>% mutate_if(is.numeric, list(mystd))
 # create dataset with one hot encoding
-dat5_one_hot <- one_hot(as.data.table(dat5_std))
+dat10_one_hot <- one_hot(as.data.table(dat10_std))
 
 # set up k value for k-fold cross validation 
 k_fold=10
-# set number of hiddne layers
-hid_layer=5
+# set number of hidden layers
+hid_layer=3
 # create k folds
-folds<-createFolds(y=dat5_one_hot$dia_score, k=k_fold)
+folds<-createFolds(y=dat10_one_hot$cho_score, k=k_fold)
 
 test_error_RMSE<-c() 
 
 for (i in 1:k_fold){
-  fold_test<-dat5_one_hot[folds[[i]],] # select folds[[i]] as test test
-  fold_train<-dat5_one_hot[-folds[[i]],] # remaining is training set
-  network<-neuralnet(cvd_score~.-final_score-cho_score-sug_score-hyp_score, data=fold_train, hidden =hid_layer)
+  fold_test<-dat10_one_hot[folds[[i]],] # select folds[[i]] as test test
+  fold_train<-dat10_one_hot[-folds[[i]],] # remaining is training set
+  network<-neuralnet(cho_score~.-final_score-cvd_score-sug_score-hyp_score, data=fold_train, hidden =hid_layer)
   fold_predict<-predict(network, fold_test)
-  test_error_RMSE[i]<-RMSE(fold_predict, fold_test$cvd_score) # calculate and record RMSE
+  test_error_RMSE[i]<-RMSE(fold_predict, fold_test$cho_score) # calculate and record RMSE
 }
 
 avg_RMSE<-sum(test_error_RMSE)/k_fold
@@ -717,6 +717,42 @@ avg_RMSE
 plot(network)
 ```
 
+```{r k-fold cv for neural network}
+# we use dat3 as a starting point for neural network analysis
+dat11=dat3
+# normalize all numeric variables
+mystd <-function (x){
+  x<- (x-mean(x, na.rm=TRUE))/sd(x, na.rm=TRUE)
+}
+# remove NA
+dat11<-na.omit(dat11)
+# normalize numeric values in dat5 such that they have mean value = 0 and std = 1
+dat11_std<-dat11%>% mutate_if(is.numeric, list(mystd))
+# create dataset with one hot encoding
+dat11_one_hot <- one_hot(as.data.table(dat11_std))
+
+# set up k value for k-fold cross validation 
+k_fold=10
+# set number of hiddne layers
+hid_layer=5
+# create k folds
+folds<-createFolds(y=dat5_one_hot$sug_score, k=k_fold)
+
+test_error_RMSE<-c() 
+
+for (i in 1:k_fold){
+  fold_test<-dat11_one_hot[folds[[i]],] # select folds[[i]] as test test
+  fold_train<-dat11_one_hot[-folds[[i]],] # remaining is training set
+  network<-neuralnet(sug_score~.-final_score-cho_score-cvd_score-hyp_score, data=fold_train, hidden =hid_layer)
+  fold_predict<-predict(network, fold_test)
+  test_error_RMSE[i]<-RMSE(fold_predict, fold_test$sug_score) # calculate and record RMSE
+}
+
+avg_RMSE<-sum(test_error_RMSE)/k_fold
+avg_RMSE
+
+plot(network)
+```
 
 ```{r random forest}
 dat6 = dat3
