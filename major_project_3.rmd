@@ -786,6 +786,7 @@ rp<-rpart(dia_score~.-final_score-cho_score-sug_score-hyp_score,
       )
 
 fancyRpartPlot(rp,palettes=c("Oranges"), main="Dia_score Prediction")
+test
 
 ```
 
