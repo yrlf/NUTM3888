@@ -1,0 +1,357 @@
+---
+title: "Major Clean"
+author: "Yang"
+date: "2021/9/15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+```{r libraries}
+# Load in all libraries
+library(tidyverse)
+library(here)      # directory referencing
+library(readxl)    # reading Excel files
+library(janitor)   # data cleaning 
+library(stringr)   # string manimpuation
+library(tidyr)     # new tidy functions
+```
+```{r read_in_raw_data}
+raw_biom <- read.csv(here("AHS11biomedical.csv"), header=TRUE)
+raw_nutr <- read.csv(here("AHS11nutrient.csv"), header=TRUE)
+raw_food <- read.csv(here("AHS11food.csv"), header=TRUE)
+```
+
+
+
+```{r define_quiet_read_function}
+quiet_read <- purrr::quietly(readxl::read_excel)
+```
+
+Read the data dictionary for each of the three data sources which are located
+in sheets 1 to 3 of the "nutmstatDataItems2019.xlsx" file.
+
+```{r read_data_dictionaries}
+dict_biom <- quiet_read("nutmstatDataItems2019.xlsx",sheet=1)$result
+dict_nutr <- quiet_read("nutmstatDataItems2019.xlsx",sheet=2)$result
+dict_food <- quiet_read("nutmstatDataItems2019.xlsx",sheet=3)$result
+```
+
+### Cleaning the variable names
+
+We are going to process the data dictionary and use this information to
+process the raw datasets so that they are technically correct.
+
+```{r clean_names}
+dict_biom <- dict_biom %>% janitor::clean_names() %>% rename(extra=x3)  
+dict_nutr <- dict_nutr %>% janitor::clean_names() %>% rename(extra1=x3,extra2=x4) 
+dict_food <- dict_food %>% janitor::clean_names() %>% rename(extra=x3) 
+```
+
+### Remove empty rows
+
+The next step will be to remove any empty rows from each of the raw 
+datasets.
+
+```{r remove_empty_rows}
+# Remove any empty rows
+dict_biom <- dict_biom %>% janitor::remove_empty("rows")
+dict_nutr <- dict_nutr %>% janitor::remove_empty("rows")
+dict_food <- dict_food %>% janitor::remove_empty("rows")
+```
+
+The data dictionaries are organized in blocks. For example 
+
+```{r take_a_look_at_biom2}
+DT::datatable(dict_biom)
+```
+ 
+The first line of each block contains a human readable name, and possibly some
+extra information.
+
+
+### Create datasets with human readable versions of the variable names
+
+```{r get_first_line_of_each_block}
+# Remove any empty rows
+biom_readable <- dict_biom %>% 
+  filter(!is.na(variable_name))  
+
+nutr_readable <- dict_nutr %>% 
+  filter(!is.na(variable_name)) %>% 
+  distinct() # Removes 1 duplicate
+
+food_readable <- dict_food %>% 
+  filter(!is.na(variable_name)) %>% 
+  distinct() 
+```
+
+ 
+### Fill in blanks in the variable names
+
+The blocks are defined by a variable name, e.g. "BMISC" and any NAs below it
+correspond to this variable. So we are going to identify the blocks using the
+fill function
+
+```{r fill_NAs_in_variable_names}
+# Remove any empty rows
+dict_biom <- dict_biom %>% tidyr::fill(variable_name)
+dict_nutr <- dict_nutr %>% tidyr::fill(variable_name)
+dict_food <- dict_food %>% tidyr::fill(variable_name)  
+```
+ 
+
+### Create a function to determine which variables are continuous and which are categorical
+
+
+Next we will identify which variables are continuous, and which are factors
+my performing a string search for each block for the word "continuous".
+
+```{r}
+get_type <- function(dict) 
+{
+  #dict <- dict_nutr
+  var_names <- unique(dict$variable_name)
+  var_type  <- c()
+  for (j in 1:length(var_names))
+  {
+    # Get all dictionary lines corresponding to a varible
+    # (a block of lines)
+    dict_block <- dict %>% 
+      filter(variable_name==var_names[j])
+    
+    # Take all of the characters in a block, paste them 
+    # together and make all characters lower case
+    block_string <- dict_block %>%
+      select(-variable_name) %>%
+      as.matrix() %>%
+      as.vector() %>%
+      paste(collapse="") %>%
+      tolower()
+    
+    # Assign variable if we can find the word "continuous"
+    # in the block otherwise assume that it is "categorical"
+    var_type[j] <- block_string %>% 
+      str_detect("continuous") %>% 
+      ifelse("continuous","categorical") 
+  }
+  return(var_type)
+}
+```
+
+### Try to infer the data types from the data dictionary
+ 
+```{r, eval=TRUE}  
+tib1 <- tibble(variable_type=get_type(dict_biom))
+tib2 <- tibble(variable_type=rep("continuous",nrow(nutr_readable)))
+tib3 <- tibble(variable_type=get_type(dict_food))
+
+# Create a new tibble that takes the readable tibble,
+# appends the variable type, and do some minor fixing
+types_biom <- bind_cols(biom_readable, tib1) %>%
+  mutate(variable_type=ifelse(variable_name%in%c("ABSPID","ABSHID"), "string",variable_type))
+
+types_nutr <- bind_cols(nutr_readable, tib2) %>%
+  mutate(variable_type=ifelse(variable_name%in%c("ABSPID","ABSHID"), "string",variable_type))
+
+types_food <- bind_cols(food_readable, tib3) %>%
+  mutate(variable_type=ifelse(variable_name%in%c("ABSPID","ABSHID"), "string",variable_type)) 
+```
+
+
+### Split the description varible in the data dictionary into value and meaning columns
+
+```{r}
+get_special_value_meanings <- function(dict)
+{
+  var_names <- unique(dict$variable_name)
+  special   <- tibble(variable_name=c(),
+                      value=c(),
+                      meaning=c())
+  
+  for (j in 1:length(var_names)) 
+  {
+    # Get a block of values from the dictionary
+    block <-  dict %>%
+      filter(variable_name==var_names[j])
+  
+    if (nrow(block)>1) {
+      # Split  the descrition into value/meaning pairs
+      special_block <- block[-1,-c(3:ncol(block))] %>%
+        dplyr::filter(!grepl("continuous",tolower(description))) %>%
+        separate(col=2, 
+                 sep="[.]",
+                 into=c("value","meaning")) %>%
+        mutate(value=as.numeric(value),
+               meaning=tolower(str_trim(meaning))) 
+      
+      # append these to a block of special value/meaning pairs
+      special <- bind_rows(special, special_block)
+    }
+  }
+  return(special)
+}
+
+special_biom <- get_special_value_meanings(dict_biom)
+special_nutr <- get_special_value_meanings(dict_nutr) %>% na.omit()
+special_food <- get_special_value_meanings(dict_food) %>% na.omit()
+```
+
+```{r special_biom}
+DT::datatable(special_biom)
+```
+
+In summary so far we have the following R objects:
+
++ dict_XXXX contains the dictionary category meainings.
++ special_XXXX contains the meanings of special values.
++ types_XXXX contains the variable types and human readable values.
++ raw_XXXX contains the raw data.
+
+We will assume that special values in the data dictionary are missing values if the variable type is
+"continuous". If the variable type is "categorical" then the special values are missingness indicators if
+the value is one of
+
++ "not applicable",
++ "measurement not taken - equipment faulty",
++ "measurement not taken - other reason",
++ "measurement not taken - refusal",
++ "not collected",
++ "not determined",
++ "not known",
++ "not known if currently on a diet",
++ "not measured",
++ "not reported",
++ "not stated",
++ "not used"
+
+Otherwise we will assume that the categorical value is a non-missing category.
+
+Remove columns in the "food" dataset with columns we don't have dictionary items for.
+These seem to be some type of "id" variables, perhaps, for state, council or suburb
+level identification.
+
+```{r}
+proc_food <- raw_food %>%
+  select(-ABSLFID,
+         -ABSBID,
+         -ABSSID,
+         -ABSFID)
+```
+
+### Convert all categorical variables and convert them to factors in R.
+
+```{r}
+categorical_to_factor <- function(types, proc) 
+{
+  var_names <- colnames(proc)  
+  for (i in 1:length(var_names)) 
+  {
+    # Extract the inferred variable type from the types tibble
+    var_type <- types %>% 
+      filter(variable_name==var_names[i]) %>%
+      select(variable_type) %>%
+      as.character()
+    
+    # If the type is categorical turn the variable into a factor
+    if (var_type=="categorical") {
+      proc[[var_names[i]]] <- as.factor(proc[[var_names[i]]])
+    }
+  }
+  return(proc)
+}
+
+proc_biom <- categorical_to_factor(types_biom,raw_biom)
+proc_nutr <- categorical_to_factor(types_nutr,raw_nutr)
+proc_food <- categorical_to_factor(types_food,proc_food)
+```
+
+### Create a function the converts raw data to technically correct data 
+
+```{r}
+miss_defs <- c("not applicable",
+               "measurement not taken - equipment faulty",
+               "measurement not taken - other reason",
+               "measurement not taken - refusal",
+               "not collected",
+               "not determined",
+               "not known",
+               "not known if currently on a diet",
+               "not measured",
+               "not reported",
+               "not stated",
+               "not used")
+
+raw_to_tech <- function(proc, special, types)
+{
+  var_names <- colnames(proc)
+  for (j in 1:length(var_names)) 
+  {
+    var_val <- var_names[j]
+    specials <- special %>%
+      filter(variable_name==var_val)
+    if (nrow(specials)>0) 
+    {
+      ind <- which(var_names==var_val)
+      var_miss_str  <- paste0(var_val,"_MISS")
+      var_miss_reas <- rep("observed",nrow(proc))
+      var_vals      <- proc[,ind]
+      var_type <- types %>% 
+        filter(variable_name==var_val) %>%
+        select(variable_type) %>%
+        as.character()
+      if (var_type=="continuous") {
+        for (i in 1:length(var_vals)) {
+          if (var_vals[i] %in% specials$value) {
+            ind2 <- which(var_vals[i]==specials$value)
+            var_vals[i]      <- NA
+            var_miss_reas[i] <- specials[ind2,3] %>% as.character()
+          }
+        }
+      }
+      if (var_type=="categorical") {
+        for (i in 1:length(var_vals)) {
+          spec_val  <- specials$value
+          spec_meam <- specials$meaning
+          if (var_vals[i] %in% spec_val) 
+          {
+            var_mean <- spec_meam[var_vals[i] == spec_val]
+            if (var_mean %in% miss_defs) {
+              var_vals[i]      <- NA
+              var_miss_reas[j] <- var_mean
+            }
+          } else {
+            var_vals[i]      <- NA
+            var_miss_reas[i] <- "unknown"
+          }
+        }
+      }
+      if (any(is.na(var_vals))) {
+        proc[,ind] <- var_vals
+        proc$dummy <- var_miss_reas
+        colnames(proc)[ncol(proc)] <- var_miss_str
+      }
+    }
+  }
+  return(proc)
+}
+```
+
+### Apply the function to each of the three main datasets
+
+```{r}
+tech_biom <- raw_to_tech(proc_biom, special_biom, types_biom)
+tech_nutr <- raw_to_tech(proc_nutr, special_nutr, types_nutr)
+tech_food <- raw_to_tech(proc_food, special_food, types_food)  
+```
+
+### Save the relevant R objects for future use.
+
+```{r}
+save(tech_biom, dict_biom, types_biom,
+     tech_nutr, dict_nutr, types_nutr,
+     tech_food, dict_nutr, types_food,
+     file = "tech_data.Rdata")
+```
